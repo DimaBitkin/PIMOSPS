@@ -224,3 +224,4 @@ if __name__ == '__main__':
     root = tk.Tk()
     app = SimulatorApp(root)
     root.mainloop()
+qwert
