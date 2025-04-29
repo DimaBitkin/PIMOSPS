@@ -1,5 +1,3 @@
-# arm_simulator.py
-
 from dataclasses import dataclass, field
 from typing import Dict, List, Callable, Optional
 import tkinter as tk
@@ -9,14 +7,19 @@ from tkinter import messagebox
 # -------------------- Модель процессора --------------------
 @dataclass
 class CPU:
+    # 16 регистров R0–R15, инициализируются нулями
     registers: Dict[str, int] = field(default_factory=lambda: {f"R{i}": 0 for i in range(16)})
+    # Простая память в виде словаря (адрес: значение)
     memory: Dict[int, int] = field(default_factory=dict)
-    pc: int = 0
-    lr: int = 0  # Link Register (используется для BL)
+    pc: int = 0      # Program Counter
+    lr: int = 0      # Link Register (используется при BL — переход с возвратом)
+    # Флаги состояния: N — отрицательный, Z — ноль, C — перенос, V — переполнение
     flags: Dict[str, int] = field(default_factory=lambda: {'N': 0, 'Z': 0, 'C': 0, 'V': 0})
-    pipeline: List[str] = field(default_factory=lambda: ["" for _ in range(5)])  # F, D, E, M, W
+    # Конвейер команд: 5 стадий — Fetch, Decode, Execute, Memory, WriteBack
+    pipeline: List[str] = field(default_factory=lambda: ["" for _ in range(5)])
 
     def reset(self):
+        # Сброс процессора: заново инициализировать все поля
         self.__init__()
 
 # -------------------- Парсер инструкций --------------------
@@ -31,53 +34,68 @@ def execute(cpu: CPU, instr: List[str]):
     op = instr[0].upper()
 
     def get_val(x):
+        # Получение значения регистра или непосредственного значения
         if x.startswith('R'):
             return cpu.registers.get(x, 0)
         return int(x.strip('#'))
 
     def get_imm(x):
+        # Получение непосредственного значения (иммедиат)
         return int(x.strip('#'))
+    try:
+        # Реализация команд ARM
+        if op == 'MOV':
+            cpu.registers[instr[1]] = get_val(instr[2])
 
-    if op == 'MOV':
-        cpu.registers[instr[1]] = get_val(instr[2])
+        elif op == 'ADD':
+            cpu.registers[instr[1]] = get_val(instr[2]) + get_val(instr[3])
 
-    elif op == 'ADD':
-        cpu.registers[instr[1]] = get_val(instr[2]) + get_val(instr[3])
+        elif op == 'SUB':
+            cpu.registers[instr[1]] = get_val(instr[2]) - get_val(instr[3])
 
-    elif op == 'SUB':
-        cpu.registers[instr[1]] = get_val(instr[2]) - get_val(instr[3])
+        elif op == 'CMP':
+            result = get_val(instr[1]) - get_val(instr[2])
+            # Установка флагов Z и N по результату
+            cpu.flags['Z'] = int(result == 0)
+            cpu.flags['N'] = int(result < 0)
 
-    elif op == 'CMP':
-        result = get_val(instr[1]) - get_val(instr[2])
-        cpu.flags['Z'] = int(result == 0)
-        cpu.flags['N'] = int(result < 0)
+        elif op == 'LDR':
+            # Загрузка из памяти по адресу
+            addr = get_val(instr[2])
+            cpu.registers[instr[1]] = cpu.memory.get(addr, 0)
 
-    elif op == 'LDR':
-        addr = get_val(instr[2])
-        cpu.registers[instr[1]] = cpu.memory.get(addr, 0)
+        elif op == 'STR':
+            # Сохранение в память по адресу
+            addr = get_val(instr[2])
+            cpu.memory[addr] = get_val(instr[1])
 
-    elif op == 'STR':
-        addr = get_val(instr[2])
-        cpu.memory[addr] = get_val(instr[1])
+        elif op == 'B':
+            # Безусловный переход
+            cpu.pc = int(instr[1]) - 1  # -1, т.к. pc будет увеличен после выполнения
 
-    elif op == 'B':
-        cpu.pc = int(instr[1]) - 1
+        elif op == 'BL':
+            # Переход с возвратом
+            cpu.lr = cpu.pc
+            cpu.pc = int(instr[1]) - 1
 
-    elif op == 'BL':
-        cpu.lr = cpu.pc
-        cpu.pc = int(instr[1]) - 1
+        elif op == 'BX':
+            # Возврат по адресу в LR или переход по регистру
+            if instr[1].upper() == 'LR':
+                cpu.pc = cpu.lr
+            else:
+                cpu.pc = get_val(instr[1])
 
-    elif op == 'BX':
-        if instr[1].upper() == 'LR':
-            cpu.pc = cpu.lr
+        elif op == 'NOP':
+            # Пустая операция
+            pass
+
         else:
-            cpu.pc = get_val(instr[1])
-
-    elif op == 'NOP':
-        pass
-
-    else:
-        raise ValueError(f"Unknown instruction: {op}")
+            # Неизвестная команда — возбуждение исключения
+            raise ValueError(f"Unknown instruction: {op}")
+    except IndexError:
+        raise ValueError(f"Недостаточно аргументов в инструкции: {' '.join(instr)}")
+    except Exception as e:
+        raise ValueError(f"Ошибка при выполнении инструкции {' '.join(instr)}: {str(e)}")
 
 # -------------------- UI-интерфейс --------------------
 class SimulatorApp:
@@ -90,6 +108,7 @@ class SimulatorApp:
 
         self.instr_input = tk.Text(root, height=10, width=50)
         self.instr_input.pack()
+        # После каждого нажатия клавиши вызывается метод syntax_highlight — он будет подсвечивать ключевые слова и ошибки в тексте.
         self.instr_input.bind("<KeyRelease>", self.syntax_highlight)
 
         # Определяем стили для подсветки
@@ -97,6 +116,7 @@ class SimulatorApp:
         self.instr_input.tag_configure("register", foreground="dark green")
         self.instr_input.tag_configure("error", background="red", foreground="white")
 
+        #Создаем рамку (LabelFrame) с заголовком — здесь будут вводиться начальные значения регистров.
         self.reg_frame = tk.LabelFrame(root, text="Начальные значения регистров")
         self.reg_frame.pack()
         self.reg_entries = {}
@@ -129,6 +149,7 @@ class SimulatorApp:
 
         lines = text.strip().split("\n")
         keywords = {'MOV', 'ADD', 'SUB', 'CMP', 'B', 'BL', 'BX', 'LDR', 'STR', 'NOP'}
+        #Регулярное выражение для поиска имен регистров R0 – R15.\b — граница слова, ([0-9]|1[0-5]) — цифра от 0 до 9 или от 10 до 15.
         reg_pattern = r'\bR([0-9]|1[0-5])\b'
         
         for lineno, line in enumerate(lines):
@@ -152,7 +173,7 @@ class SimulatorApp:
                 start = f"{lineno+1}.{match.start()}"
                 end = f"{lineno+1}.{match.end()}"
                 self.instr_input.tag_add("register", start, end)
-
+    #загружает инструкции из текстового поля и начальные значения регистров в модель процессора.
     def load_instructions(self):
         lines = self.instr_input.get("1.0", tk.END).strip().split('\n')
         self.instructions = [parse_instruction(line) for line in lines if line.strip()]
@@ -170,11 +191,13 @@ class SimulatorApp:
                     return
 
         self.update_display()
-
+    #реализует один такт работы конвейера ARM-процессора:
     def step(self):
         # Обработка конвейера
         self.cpu.pipeline.pop()
         instr_str = " ".join(self.instructions[self.cpu.pc]) if self.cpu.pc < len(self.instructions) else ""
+        
+        #Новая инструкция (или пустая строка) помещается в начало конвейера — стадию Fetch.
         self.cpu.pipeline.insert(0, instr_str)
 
         # Исполнение только когда команда на стадии Execute
@@ -189,11 +212,11 @@ class SimulatorApp:
             self.cpu.pc += 1
 
         self.update_display()
-
+    #Метод вызывается при нажатии на кнопку «Сброс». Он полностью очищает состояние эмулятора.
     def reset(self):
         self.cpu.reset()
         self.instructions = []
-        self.instr_input.delete("1.0", tk.END)
+        #self.instr_input.delete("1.0", tk.END)
         for entry in self.reg_entries.values():
             entry.delete(0, tk.END)
         self.update_display()
