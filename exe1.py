@@ -17,6 +17,8 @@ class CPU:
     flags: Dict[str, int] = field(default_factory=lambda: {'N': 0, 'Z': 0, 'C': 0, 'V': 0})
     # Конвейер команд: 5 стадий — Fetch, Decode, Execute, Memory, WriteBack
     pipeline: List[str] = field(default_factory=lambda: ["" for _ in range(5)])
+    #флаг перехода 
+    branch_taken: bool = False
 
     def reset(self):
         # Сброс процессора: заново инициализировать все поля
@@ -34,16 +36,31 @@ def execute(cpu: CPU, instr: List[str]):
     op = instr[0].upper()
 
     def get_val(x):
-        # Получение значения регистра или непосредственного значения
         if x.startswith('R'):
             return cpu.registers.get(x, 0)
         return int(x.strip('#'))
 
     def get_imm(x):
-        # Получение непосредственного значения (иммедиат)
         return int(x.strip('#'))
+
+    def check_condition(cond):
+        Z, N = cpu.flags['Z'], cpu.flags['N']
+        if cond == 'EQ':
+            return Z == 1
+        elif cond == 'NE':
+            return Z == 0
+        elif cond == 'GT':
+            return Z == 0 and N == 0
+        elif cond == 'LT':
+            return N == 1
+        elif cond == 'GE':
+            return N == 0
+        elif cond == 'LE':
+            return Z == 1 or N == 1
+        else:
+            return False
+
     try:
-        # Реализация команд ARM
         if op == 'MOV':
             cpu.registers[instr[1]] = get_val(instr[2])
 
@@ -55,47 +72,50 @@ def execute(cpu: CPU, instr: List[str]):
 
         elif op == 'CMP':
             result = get_val(instr[1]) - get_val(instr[2])
-            # Установка флагов Z и N по результату
             cpu.flags['Z'] = int(result == 0)
             cpu.flags['N'] = int(result < 0)
 
         elif op == 'LDR':
-            # Загрузка из памяти по адресу
             addr = get_val(instr[2])
             cpu.registers[instr[1]] = cpu.memory.get(addr, 0)
 
         elif op == 'STR':
-            # Сохранение в память по адресу
             addr = get_val(instr[2])
             cpu.memory[addr] = get_val(instr[1])
 
+        elif op in ['BEQ', 'BNE', 'BGT', 'BLT', 'BGE', 'BLE']:
+            cond = op[1:]
+            if check_condition(cond):
+                cpu.pc = int(instr[1]) - 1
+                cpu.branch_taken = True
+
         elif op == 'B':
-            # Безусловный переход
-            cpu.pc = int(instr[1]) - 1  # -1, т.к. pc будет увеличен после выполнения
+            cpu.pc = int(instr[1]) - 1
+            cpu.branch_taken = True
 
         elif op == 'BL':
-            # Переход с возвратом
             cpu.lr = cpu.pc
             cpu.pc = int(instr[1]) - 1
+            cpu.branch_taken = True
 
         elif op == 'BX':
-            # Возврат по адресу в LR или переход по регистру
             if instr[1].upper() == 'LR':
                 cpu.pc = cpu.lr
             else:
                 cpu.pc = get_val(instr[1])
+                cpu.branch_taken = True
 
         elif op == 'NOP':
-            # Пустая операция
             pass
 
         else:
-            # Неизвестная команда — возбуждение исключения
             raise ValueError(f"Unknown instruction: {op}")
+
     except IndexError:
         raise ValueError(f"Недостаточно аргументов в инструкции: {' '.join(instr)}")
     except Exception as e:
         raise ValueError(f"Ошибка при выполнении инструкции {' '.join(instr)}: {str(e)}")
+
 
 # -------------------- UI-интерфейс --------------------
 class SimulatorApp:
@@ -195,8 +215,13 @@ class SimulatorApp:
     def step(self):
         # Обработка конвейера
         self.cpu.pipeline.pop()
-        instr_str = " ".join(self.instructions[self.cpu.pc]) if self.cpu.pc < len(self.instructions) else ""
-        
+
+        if self.cpu.pc < len(self.instructions):
+            instr_str = " ".join(self.instructions[self.cpu.pc]) if self.cpu.pc < len(self.instructions) else ""
+            self.cpu.pc += 1
+        else:
+            instr_str = ""
+
         #Новая инструкция (или пустая строка) помещается в начало конвейера — стадию Fetch.
         self.cpu.pipeline.insert(0, instr_str)
 
@@ -208,9 +233,13 @@ class SimulatorApp:
                 messagebox.showerror("Ошибка", str(e))
                 return
 
-        if self.cpu.pc < len(self.instructions):
+        # Увеличиваем PC только если не было перехода
+        if not self.cpu.branch_taken and self.cpu.pc < len(self.instructions):
             self.cpu.pc += 1
 
+        # Сбрасываем флаг перехода
+        self.cpu.branch_taken = False
+        
         self.update_display()
     #Метод вызывается при нажатии на кнопку «Сброс». Он полностью очищает состояние эмулятора.
     def reset(self):
