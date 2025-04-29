@@ -215,13 +215,11 @@ class SimulatorApp:
     def step(self):
         # Обработка конвейера
         self.cpu.pipeline.pop()
-
         if self.cpu.pc < len(self.instructions):
-            instr_str = " ".join(self.instructions[self.cpu.pc]) if self.cpu.pc < len(self.instructions) else ""
-            self.cpu.pc += 1
+            instr_str = " ".join(self.instructions[self.cpu.pc])
         else:
             instr_str = ""
-
+        
         #Новая инструкция (или пустая строка) помещается в начало конвейера — стадию Fetch.
         self.cpu.pipeline.insert(0, instr_str)
 
@@ -233,14 +231,13 @@ class SimulatorApp:
                 messagebox.showerror("Ошибка", str(e))
                 return
 
-        # Увеличиваем PC только если не было перехода
         if not self.cpu.branch_taken and self.cpu.pc < len(self.instructions):
             self.cpu.pc += 1
 
-        # Сбрасываем флаг перехода
-        self.cpu.branch_taken = False
-        
+        self.cpu.branch_taken = False  # сброс флага
+
         self.update_display()
+
     #Метод вызывается при нажатии на кнопку «Сброс». Он полностью очищает состояние эмулятора.
     def reset(self):
         self.cpu.reset()
