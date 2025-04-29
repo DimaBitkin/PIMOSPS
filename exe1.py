@@ -87,11 +87,19 @@ class SimulatorApp:
         self.instructions: List[List[str]] = []
 
         root.title("ARM Instruction Simulator")
+        
+        self.breakpoints = set()
+        self.running_to_cursor = False
+        self.target_line = None
 
         self.instr_input = tk.Text(root, height=10, width=50)
         self.instr_input.pack()
+        self.instr_input.bind("<Button-1>", self.toggle_breakpoint)
+        self.instr_input.tag_configure("breakpoint", background="yellow")
         self.instr_input.bind("<KeyRelease>", self.syntax_highlight)
-
+        
+        self.run_to_cursor_button = tk.Button(root, text="Run to Cursor", command=self.run_to_cursor)
+        self.run_to_cursor_button.pack()
         # Определяем стили для подсветки
         self.instr_input.tag_configure("keyword", foreground="blue")
         self.instr_input.tag_configure("register", foreground="dark green")
@@ -172,6 +180,14 @@ class SimulatorApp:
         self.update_display()
 
     def step(self):
+        if self.cpu.pc >= len(self.instructions):
+            return
+
+        # Проверка на остановку по точке останова
+        if (self.cpu.pc + 1) in self.breakpoints and not self.running_to_cursor:
+            messagebox.showinfo("Точка останова", f"Остановлено на строке {self.cpu.pc + 1}")
+            return
+
         # Обработка конвейера
         self.cpu.pipeline.pop()
         instr_str = " ".join(self.instructions[self.cpu.pc]) if self.cpu.pc < len(self.instructions) else ""
@@ -183,12 +199,18 @@ class SimulatorApp:
                 execute(self.cpu, parse_instruction(self.cpu.pipeline[2]))
             except Exception as e:
                 messagebox.showerror("Ошибка", str(e))
+                self.running_to_cursor = False
                 return
 
         if self.cpu.pc < len(self.instructions):
             self.cpu.pc += 1
 
+        # Остановка при достижении цели Run to Cursor
+        if self.running_to_cursor and self.cpu.pc > self.target_line:
+            self.running_to_cursor = False
+
         self.update_display()
+
 
     def reset(self):
         self.cpu.reset()
@@ -218,10 +240,37 @@ class SimulatorApp:
         self.state_display.insert(tk.END, "\n== Память ==\n")
         for addr in sorted(self.cpu.memory.keys()):
             self.state_display.insert(tk.END, f"[{addr}]: {self.cpu.memory[addr]}\n")
+        
+    def toggle_breakpoint(self, event):
+            """Ставит или убирает точку останова на строке"""
+            index = self.instr_input.index(f"@{event.x},{event.y}")
+            line = int(index.split('.')[0]) - 1  # Нумерация строк с нуля
+            if line in self.breakpoints:
+                self.breakpoints.remove(line)
+            else:
+                self.breakpoints.add(line)
+            self.highlight_breakpoints()
+    def highlight_breakpoints(self):
+        """Подсвечивает строки с точками останова"""
+        self.instr_input.tag_remove('breakpoint', '1.0', tk.END)
+        for line in self.breakpoints:
+            self.instr_input.tag_add('breakpoint', f"{line + 1}.0", f"{line + 1}.end")
+        self.instr_input.tag_config('breakpoint', background='red')
+
+    def run_to_cursor(self):
+        try:
+            index = self.instr_input.index(tk.INSERT)
+            self.target_line = int(index.split('.')[0]) - 1  # Внутренняя нумерация с 0
+            self.running_to_cursor = True
+            while self.running_to_cursor and self.cpu.pc <= self.target_line:
+                self.step()
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+            self.running_to_cursor = False
+
 
 # -------------------- Запуск --------------------
 if __name__ == '__main__':
     root = tk.Tk()
     app = SimulatorApp(root)
     root.mainloop()
-qwert
