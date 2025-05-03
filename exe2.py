@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Callable, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import tkinter as tk
 import re
 from tkinter import messagebox
@@ -7,22 +7,16 @@ from tkinter import messagebox
 # -------------------- Модель процессора --------------------
 @dataclass
 class CPU:
-    # 16 регистров R0–R15, инициализируются нулями
     registers: Dict[str, int] = field(default_factory=lambda: {f"R{i}": 0 for i in range(16)})
-    # Простая память в виде словаря (адрес: значение)
     memory: Dict[int, int] = field(default_factory=dict)
-    pc: int = 0      # Program Counter
-    lr: int = 0      # Link Register (используется при BL — переход с возвратом)
-    # Флаги состояния: N — отрицательный, Z — ноль, C — перенос, V — переполнение
+    pc: int = 0
+    lr: int = 0
     flags: Dict[str, int] = field(default_factory=lambda: {'N': 0, 'Z': 0, 'C': 0, 'V': 0})
-    # Конвейер команд: 5 стадий — Fetch, Decode, Execute, Memory, WriteBack
     pipeline: List[str] = field(default_factory=lambda: ["" for _ in range(5)])
     pending_write: Optional[Tuple[str, int]] = None  # Хранит (регистр, значение) до WriteBack
-    #флаг перехода 
-    branch_taken: bool = False
+    flush_pipeline: bool = False  # Флаг для сброса конвейера
 
     def reset(self):
-        # Сброс процессора: заново инициализировать все поля
         self.__init__()
 
 # -------------------- Парсер инструкций --------------------
@@ -88,23 +82,23 @@ def execute(cpu: CPU, instr: List[str]):
             cond = op[1:]
             if check_condition(cond):
                 cpu.pc = int(instr[1])
-                cpu.branch_taken = True
+                cpu.flush_pipeline = True
 
         elif op == 'B':
             cpu.pc = int(instr[1])
-            cpu.branch_taken = True
+            cpu.flush_pipeline = True
 
         elif op == 'BL':
-            cpu.lr = cpu.pc
-            cpu.pc = int(instr[1]) 
-            cpu.branch_taken = True
+            cpu.lr = cpu.pc-1
+            cpu.pc = int(instr[1])-1
+            cpu.flush_pipeline = True
 
         elif op == 'BX':
             if instr[1].upper() == 'LR':
-                cpu.pc = cpu.lr 
+                cpu.pc = cpu.lr-1
             else:
-                cpu.pc = get_val(instr[1]) 
-                cpu.branch_taken = True
+                cpu.pc = get_val(instr[1])
+            cpu.flush_pipeline = True
 
         elif op == 'NOP':
             pass
@@ -117,7 +111,6 @@ def execute(cpu: CPU, instr: List[str]):
     except Exception as e:
         raise ValueError(f"Ошибка при выполнении инструкции {' '.join(instr)}: {str(e)}")
 
-
 # -------------------- UI-интерфейс --------------------
 class SimulatorApp:
     def __init__(self, root):
@@ -129,15 +122,12 @@ class SimulatorApp:
 
         self.instr_input = tk.Text(root, height=10, width=50)
         self.instr_input.pack()
-        # После каждого нажатия клавиши вызывается метод syntax_highlight — он будет подсвечивать ключевые слова и ошибки в тексте.
         self.instr_input.bind("<KeyRelease>", self.syntax_highlight)
 
-        # Определяем стили для подсветки
         self.instr_input.tag_configure("keyword", foreground="blue")
         self.instr_input.tag_configure("register", foreground="dark green")
         self.instr_input.tag_configure("error", background="red", foreground="white")
 
-        #Создаем рамку (LabelFrame) с заголовком — здесь будут вводиться начальные значения регистров.
         self.reg_frame = tk.LabelFrame(root, text="Начальные значения регистров")
         self.reg_frame.pack()
         self.reg_entries = {}
@@ -169,39 +159,35 @@ class SimulatorApp:
         self.instr_input.tag_remove("error", "1.0", tk.END)
 
         lines = text.strip().split("\n")
-        keywords = {'MOV', 'ADD', 'SUB', 'CMP', 'B', 'BL', 'BX', 'LDR', 'STR', 'NOP'}
-        #Регулярное выражение для поиска имен регистров R0 – R15.\b — граница слова, ([0-9]|1[0-5]) — цифра от 0 до 9 или от 10 до 15.
+        keywords = {'MOV', 'ADD', 'SUB', 'CMP', 'B', 'BL', 'BX', 'LDR', 'STR', 'NOP','BEQ', 'BNE', 'BGT', 'BLT', 'BGE', 'BLE'}
         reg_pattern = r'\bR([0-9]|1[0-5])\b'
-        
+
         for lineno, line in enumerate(lines):
             line_start = f"{lineno+1}.0"
             line_end = f"{lineno+1}.end"
-
-            # Проверка синтаксиса
             tokens = parse_instruction(line)
             if tokens and tokens[0].upper() not in keywords:
                 self.instr_input.tag_add("error", line_start, line_end)
 
-            # Подсветка ключевых слов
             for kw in keywords:
                 for match in re.finditer(r'\b' + kw + r'\b', line, re.IGNORECASE):
                     start = f"{lineno+1}.{match.start()}"
                     end = f"{lineno+1}.{match.end()}"
                     self.instr_input.tag_add("keyword", start, end)
 
-            # Подсветка регистров
             for match in re.finditer(reg_pattern, line, re.IGNORECASE):
                 start = f"{lineno+1}.{match.start()}"
                 end = f"{lineno+1}.{match.end()}"
                 self.instr_input.tag_add("register", start, end)
-    #загружает инструкции из текстового поля и начальные значения регистров в модель процессора.
+
     def load_instructions(self):
         lines = self.instr_input.get("1.0", tk.END).strip().split('\n')
         self.instructions = [parse_instruction(line) for line in lines if line.strip()]
         self.cpu.pc = 0
         self.cpu.pipeline = ["" for _ in range(5)]
+        self.cpu.pending_write = None
+        self.cpu.flush_pipeline = False
 
-        # Применение значений регистров из формы
         for reg, entry in self.reg_entries.items():
             val = entry.get()
             if val:
@@ -212,43 +198,41 @@ class SimulatorApp:
                     return
 
         self.update_display()
-    #реализует один такт работы конвейера ARM-процессора:
+
     def step(self):
-        # Обработка конвейера
+        if self.cpu.flush_pipeline:
+            self.cpu.pipeline = ["" for _ in range(5)]
+            self.cpu.flush_pipeline = False
+
         self.cpu.pipeline.pop()
+
         if self.cpu.pc < len(self.instructions):
             instr_str = " ".join(self.instructions[self.cpu.pc])
+            self.cpu.pc += 1
         else:
             instr_str = ""
-        
-        #Новая инструкция (или пустая строка) помещается в начало конвейера — стадию Fetch.
+
         self.cpu.pipeline.insert(0, instr_str)
 
-        # Исполнение только когда команда на стадии Execute
+        # Execute stage (index 2)
         if self.cpu.pipeline[2]:
             try:
                 execute(self.cpu, parse_instruction(self.cpu.pipeline[2]))
             except Exception as e:
                 messagebox.showerror("Ошибка", str(e))
                 return
+
         # WriteBack stage (index 4)
         if self.cpu.pending_write:
             reg, value = self.cpu.pending_write
             self.cpu.registers[reg] = value
             self.cpu.pending_write = None
 
-        if not self.cpu.branch_taken and self.cpu.pc < len(self.instructions):
-            self.cpu.pc += 1
-
-        self.cpu.branch_taken = False  # сброс флага
-
         self.update_display()
 
-    #Метод вызывается при нажатии на кнопку «Сброс». Он полностью очищает состояние эмулятора.
     def reset(self):
         self.cpu.reset()
         self.instructions = []
-        #self.instr_input.delete("1.0", tk.END)
         for entry in self.reg_entries.values():
             entry.delete(0, tk.END)
         self.update_display()
