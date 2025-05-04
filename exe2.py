@@ -85,17 +85,17 @@ def execute(cpu: CPU, instr: List[str]):
                 cpu.flush_pipeline = True
 
         elif op == 'B':
-            cpu.pc = int(instr[1])
+            cpu.pc = int(instr[1])-1
             cpu.flush_pipeline = True
 
         elif op == 'BL':
             cpu.lr = cpu.pc-1
-            cpu.pc = int(instr[1])-1
+            cpu.pc = int(instr[1])
             cpu.flush_pipeline = True
 
         elif op == 'BX':
             if instr[1].upper() == 'LR':
-                cpu.pc = cpu.lr-1
+                cpu.pc = cpu.lr
             else:
                 cpu.pc = get_val(instr[1])
             cpu.flush_pipeline = True
