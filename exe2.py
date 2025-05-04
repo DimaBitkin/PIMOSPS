@@ -9,12 +9,10 @@ from tkinter import messagebox
 class CPU:
     registers: Dict[str, int] = field(default_factory=lambda: {f"R{i}": 0 for i in range(16)})
     memory: Dict[int, int] = field(default_factory=dict)
-    pc: int = 0
-    lr: int = 0
     flags: Dict[str, int] = field(default_factory=lambda: {'N': 0, 'Z': 0, 'C': 0, 'V': 0})
     pipeline: List[str] = field(default_factory=lambda: ["" for _ in range(5)])
-    pending_write: Optional[Tuple[str, int]] = None  # Хранит (регистр, значение) до WriteBack
-    flush_pipeline: bool = False  # Флаг для сброса конвейера
+    pending_write: Optional[Tuple[str, int]] = None
+    flush_pipeline: bool = False
 
     def reset(self):
         self.__init__()
@@ -24,18 +22,19 @@ def parse_instruction(line: str) -> List[str]:
     return line.strip().replace(',', '').split()
 
 # -------------------- Выполнение команд --------------------
-def execute(cpu: CPU, instr: List[str]):
+def execute(cpu: CPU, instr: List[str]) -> Optional[Tuple[str, int]]:
     if not instr:
-        return
+        return None
 
     op = instr[0].upper()
 
     def get_val(x):
-        if x.startswith('R'):
-            return cpu.registers.get(x, 0)
-        return int(x.strip('#'))
-
-    def get_imm(x):
+        if x.upper() == 'PC':
+            return cpu.registers['R15']
+        elif x.upper() == 'LR':
+            return cpu.registers['R14']
+        elif x.startswith('R'):
+            return cpu.registers.get(x.upper(), 0)
         return int(x.strip('#'))
 
     def check_condition(cond):
@@ -57,51 +56,57 @@ def execute(cpu: CPU, instr: List[str]):
 
     try:
         if op == 'MOV':
-            cpu.pending_write = (instr[1], get_val(instr[2]))
+            return (instr[1], get_val(instr[2]))
 
         elif op == 'ADD':
-            cpu.pending_write = (instr[1], get_val(instr[2]) + get_val(instr[3]))
+            return (instr[1], get_val(instr[2]) + get_val(instr[3]))
 
         elif op == 'SUB':
-            cpu.pending_write = (instr[1], get_val(instr[2]) - get_val(instr[3]))
+            return (instr[1], get_val(instr[2]) - get_val(instr[3]))
 
         elif op == 'CMP':
             result = get_val(instr[1]) - get_val(instr[2])
             cpu.flags['Z'] = int(result == 0)
             cpu.flags['N'] = int(result < 0)
+            return None
 
         elif op == 'LDR':
             addr = get_val(instr[2])
-            cpu.pending_write = (instr[1], cpu.memory.get(addr, 0))
+            return (instr[1], cpu.memory.get(addr, 0))
 
         elif op == 'STR':
             addr = get_val(instr[2])
             cpu.memory[addr] = get_val(instr[1])
+            return None
 
         elif op in ['BEQ', 'BNE', 'BGT', 'BLT', 'BGE', 'BLE']:
             cond = op[1:]
             if check_condition(cond):
-                cpu.pc = int(instr[1])
+                cpu.registers['R15'] = int(instr[1])
                 cpu.flush_pipeline = True
+            return None
 
         elif op == 'B':
-            cpu.pc = int(instr[1])-1
+            cpu.registers['R15'] = int(instr[1]) - 1
             cpu.flush_pipeline = True
+            return None
 
         elif op == 'BL':
-            cpu.lr = cpu.pc-1
-            cpu.pc = int(instr[1])
+            cpu.registers['R14'] = cpu.registers['R15'] - 1
+            cpu.registers['R15'] = int(instr[1]) - 1
             cpu.flush_pipeline = True
+            return None
 
         elif op == 'BX':
             if instr[1].upper() == 'LR':
-                cpu.pc = cpu.lr
+                cpu.registers['R15'] = cpu.registers['R14']-1
             else:
-                cpu.pc = get_val(instr[1])
+                cpu.registers['R15'] = get_val(instr[1])
             cpu.flush_pipeline = True
+            return None
 
         elif op == 'NOP':
-            pass
+            return None
 
         else:
             raise ValueError(f"Unknown instruction: {op}")
@@ -183,7 +188,7 @@ class SimulatorApp:
     def load_instructions(self):
         lines = self.instr_input.get("1.0", tk.END).strip().split('\n')
         self.instructions = [parse_instruction(line) for line in lines if line.strip()]
-        self.cpu.pc = 0
+        self.cpu.registers['R15'] = 0
         self.cpu.pipeline = ["" for _ in range(5)]
         self.cpu.pending_write = None
         self.cpu.flush_pipeline = False
@@ -206,18 +211,23 @@ class SimulatorApp:
 
         self.cpu.pipeline.pop()
 
-        if self.cpu.pc < len(self.instructions):
-            instr_str = " ".join(self.instructions[self.cpu.pc])
-            self.cpu.pc += 1
+        if self.cpu.registers['R15'] < len(self.instructions):
+            instr_str = " ".join(self.instructions[self.cpu.registers['R15']])
+
         else:
             instr_str = ""
 
         self.cpu.pipeline.insert(0, instr_str)
+        # Увеличиваем PC только если не было перехода
+        if (self.cpu.flush_pipeline == False):
+            self.cpu.registers['R15'] += 1
 
         # Execute stage (index 2)
         if self.cpu.pipeline[2]:
             try:
-                execute(self.cpu, parse_instruction(self.cpu.pipeline[2]))
+                result = execute(self.cpu, parse_instruction(self.cpu.pipeline[2]))
+                if result:
+                    self.cpu.pending_write = result
             except Exception as e:
                 messagebox.showerror("Ошибка", str(e))
                 return
@@ -243,8 +253,8 @@ class SimulatorApp:
         for i in range(16):
             reg = f"R{i}"
             self.state_display.insert(tk.END, f"{reg}: {self.cpu.registers[reg]}\n")
-        self.state_display.insert(tk.END, f"PC: {self.cpu.pc}\n")
-        self.state_display.insert(tk.END, f"LR: {self.cpu.lr}\n")
+        # self.state_display.insert(tk.END, f"PC: {self.cpu.registers['R15']}\n")
+        # self.state_display.insert(tk.END, f"LR: {self.cpu.registers['R14']}\n")
         self.state_display.insert(tk.END, "\n== Флаги ==\n")
         for flag, val in self.cpu.flags.items():
             self.state_display.insert(tk.END, f"{flag}: {val}  ")
